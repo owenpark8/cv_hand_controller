@@ -83,9 +83,9 @@ class Camera(Node):
         super().__init__("camera")
         self.get_logger().info("camera node started")
 
-        self.m_pose_array_pub = self.create_publisher(
+        self.m_finger_points_pub = self.create_publisher(
             FingerPoints,
-            "finger_points",
+            f"{self.get_name()}/finger_points",
             10,
         )
 
@@ -179,15 +179,12 @@ class Camera(Node):
     def _maybe_grab_frame(self) -> None:
         self.get_logger().info("Grab frame called")
 
-        if self.m_inference_in_flight:
-            self.get_logger().warn("Inference in flight; skipping grab")
-            return
-
         if self.m_landmarker is None or self.m_cap is None:
             self.get_logger().warn("Landmarker or camera not ready; skipping grab")
             return
 
         ret, frame_bgr = self.m_cap.read()
+        timestamp_ms: int = self.get_clock().now().nanoseconds // 1_000_000
         if not ret:
             self.get_logger().warn("Failed to read frame from camera")
             return
@@ -199,7 +196,9 @@ class Camera(Node):
             data=frame_rgb,
         )
 
-        timestamp_ms: int = self.get_clock().now().nanoseconds // 1_000_000
+        if self.m_inference_in_flight:
+            self.get_logger().warn("Inference in flight; skipping grab")
+            return
 
         self.m_inference_in_flight = True
         self.m_landmarker.detect_async(mp_image, timestamp_ms)
@@ -208,32 +207,45 @@ class Camera(Node):
     def _on_result(
         self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int
     ) -> None:
+        self.m_frame_counter += 1
+
         has_hands = (
             result is not None
             and result.hand_landmarks is not None
             and len(result.hand_landmarks) > 0
         )
 
+        msg = FingerPoints()
+        msg.header.frame_id = f"{self.m_frame_counter}"
+        msg.header.stamp.sec = timestamp_ms // 1000
+        msg.header.stamp.nanosec = (timestamp_ms % 1000) * 1_000_000
+
         if has_hands:
             hand_landmarks = result.hand_landmarks[0]
-
-            # index tip = 8, thumb tip = 4
             index_lm = hand_landmarks[8]
             thumb_lm = hand_landmarks[4]
-
-            index_pose: List[float] = []
-            index_pose.append(index_lm.x)
-            index_pose.append(index_lm.y)
-            index_pose.append(index_lm.z)
-
-            thumb_pose: List[float] = []
-            thumb_pose.append(thumb_lm.x)
-            thumb_pose.append(thumb_lm.y)
-            thumb_pose.append(thumb_lm.z)
-
-            self.get_logger().info("Hand(s) detected")
+            msg.index_points: List[float] = [
+                float(index_lm.x),
+                float(index_lm.y),
+                float(index_lm.z),
+            ]
+            msg.thumb_points: List[float] = [
+                float(thumb_lm.x),
+                float(thumb_lm.y),
+                float(thumb_lm.z),
+            ]
         else:
-            self.get_logger().info("No hands detected")
+            msg.index_points: List[float] = [
+                float("nan"),
+                float("nan"),
+                float("nan"),
+            ]
+            msg.thumb_points: List[float] = [
+                float("nan"),
+                float("nan"),
+                float("nan"),
+            ]
+        self.m_finger_points_pub.publish(msg)
 
         if self.m_save_enabled:
             rgb_image = output_image.numpy_view()
@@ -245,7 +257,6 @@ class Camera(Node):
 
             annotated_bgr = cv2.cvtColor(annotated_rgb, cv2.COLOR_RGB2BGR)
 
-            self.m_frame_counter += 1
             filename = os.path.join(
                 self.m_output_dir,
                 f"frame_{timestamp_ms}_{self.m_frame_counter:06d}.png",
