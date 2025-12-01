@@ -1,4 +1,7 @@
+#!/usr/bin/env python3
+
 import os
+import sys
 
 from typing import Optional
 
@@ -7,6 +10,7 @@ import mediapipe as mp
 import numpy as np
 import rclpy
 
+from cv_hand_controller.msg import FingerPoints
 from mediapipe import solutions
 from mediapipe.framework.formats import landmark_pb2
 from rclpy.node import Node
@@ -18,14 +22,15 @@ HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
 HandLandmarkerResult = mp.tasks.vision.HandLandmarkerResult
 VisionRunningMode = mp.tasks.vision.RunningMode
 
-MARGIN = 10  # pixels
-FONT_SIZE = 1
-FONT_THICKNESS = 1
-HANDEDNESS_TEXT_COLOR = (88, 205, 54)  # vibrant green
-
-
+# from the google example
+# https://colab.research.google.com/github/googlesamples/mediapipe/blob/main/examples/hand_landmarker/python/hand_landmarker.ipynb#scrollTo=_JVO3rvPD4RN&line=11&uniqifier=1
 def draw_landmarks_on_image(rgb_image: np.ndarray,
                             detection_result: HandLandmarkerResult) -> np.ndarray:
+    MARGIN = 10  # pixels
+    FONT_SIZE = 1
+    FONT_THICKNESS = 1
+    HANDEDNESS_TEXT_COLOR = (88, 205, 54)  # vibrant green
+
     hand_landmarks_list = detection_result.hand_landmarks
     handedness_list = detection_result.handedness
     annotated_image = np.copy(rgb_image)
@@ -70,13 +75,19 @@ def draw_landmarks_on_image(rgb_image: np.ndarray,
             FONT_THICKNESS,
             cv2.LINE_AA,
         )
-
     return annotated_image
 
-class CvHandController(Node):
+
+class Camera(Node):
     def __init__(self) -> None:
-        super().__init__("cv_hand_controller")
-        self.get_logger().info("cv_hand_controller node started")
+        super().__init__("camera")
+        self.get_logger().info("camera node started")
+
+        self.m_pose_array_pub = self.create_publisher(
+            FingerPoints,
+            "finger_points",
+            10,
+        )
 
         # parameters
         self.declare_parameter("model_path", "")
@@ -204,6 +215,22 @@ class CvHandController(Node):
         )
 
         if has_hands:
+            hand_landmarks = result.hand_landmarks[0]
+
+            # index tip = 8, thumb tip = 4
+            index_lm = hand_landmarks[8]
+            thumb_lm = hand_landmarks[4]
+
+            index_pose: List[float] = []
+            index_pose.append(index_lm.x)
+            index_pose.append(index_lm.y)
+            index_pose.append(index_lm.z)
+
+            thumb_pose: List[float] = []
+            thumb_pose.append(thumb_lm.x)
+            thumb_pose.append(thumb_lm.y)
+            thumb_pose.append(thumb_lm.z)
+
             self.get_logger().info("Hand(s) detected")
         else:
             self.get_logger().info("No hands detected")
@@ -243,10 +270,10 @@ class CvHandController(Node):
             self.m_cap = None
         return super().destroy_node()
 
-def main(args: Optional[list[str]] = None) -> None:
-    rclpy.init(args=args)
+if __name__ == "__main__":
+    rclpy.init(args=sys.argv)
 
-    node: CvHandController = CvHandController()
+    node: Camera = Camera()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
