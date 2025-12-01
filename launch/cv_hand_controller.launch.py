@@ -15,7 +15,7 @@ def generate_launch_description():
         Node(
             package="cv_hand_controller",
             executable="camera_node.py",
-            name="side_camera",
+            name="camera_0",
             output="screen",
             parameters=[{
                 "model_path": model_path,
@@ -28,7 +28,7 @@ def generate_launch_description():
         Node(
             package="cv_hand_controller",
             executable="camera_node.py",
-            name="top_camera",
+            name="camera_1",
             output="screen",
             parameters=[{
                 "model_path": model_path,

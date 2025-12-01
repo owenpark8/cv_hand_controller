@@ -176,16 +176,7 @@ def calibrate(args: argparse.Namespace) -> None:
 
     print("Running calibration...")
 
-    (
-        rms,
-        K,
-        dist,
-        rvecs,
-        tvecs,
-        std_intrinsics,
-        std_extrinsics,
-        per_view_errors,
-    ) = cv2.aruco.calibrateCameraCharucoExtended(
+    rms, K, dist, rvecs, tvecs = cv2.aruco.calibrateCameraCharuco(
         charucoCorners=all_charuco_corners,
         charucoIds=all_charuco_ids,
         board=board,
@@ -207,7 +198,7 @@ def calibrate(args: argparse.Namespace) -> None:
             "marker_length_m": args.marker_length,
             "aruco_dictionary": int(args.aruco_dict),
         },
-        "per_view_errors": [float(e) for e in per_view_errors.ravel()],
+        "per_view_errors": [],
     }
 
     out_path = Path(args.output_json)
