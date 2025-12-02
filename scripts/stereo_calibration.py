@@ -2,62 +2,59 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
 import cv2
 import numpy as np
+import yaml
 from numpy.typing import NDArray
 
 Mat = NDArray[np.float64]
 
+
 def print_aruco_tag(args: argparse.Namespace) -> None:
     aruco_dict = cv2.aruco.getPredefinedDictionary(args.aruco_dict)
 
-    tag_px: int = args.tag_px
-    tag_id: int = args.tag_id
-
     tag_img = cv2.aruco.generateImageMarker(
         dictionary=aruco_dict,
-        id=tag_id,
-        sidePixels=tag_px,
+        id=args.tag_id,
+        sidePixels=args.tag_px,
         borderBits=1,
     )
 
     out_path = Path(args.output_tag)
-    ok = cv2.imwrite(str(out_path), tag_img)
-    if not ok:
+    if not cv2.imwrite(str(out_path), tag_img):
         raise RuntimeError(f"Failed to write ArUco tag to {out_path}")
 
     print(
         f"ArUco tag written to {out_path.resolve()}\n"
-        f"  tag id:      {tag_id}\n"
+        f"  tag id:      {args.tag_id}\n"
         f"  dictionary:  {args.aruco_dict}\n"
-        f"  resolution:  {tag_px} x {tag_px} px"
+        f"  resolution:  {args.tag_px} x {args.tag_px} px"
     )
 
-def load_intrinsics(json_path: Path) -> Tuple[Mat, Mat, int, int, Dict[str, Any]]:
+
+def load_intrinsics(yaml_path: Path) -> Tuple[Mat, Mat, int, int, Dict[str, Any]]:
     """
-    Load camera intrinsics from a JSON file of the form:
+    Load camera intrinsics from a YAML file of the form:
 
-    {
-      "image_width": ...,
-      "image_height": ...,
-      "camera_matrix": [[...],[...],[...]],
-      "distortion_coefficients": [...],
-      ...
-    }
-    Returns (K, dist, width, height, full_json_dict).
+    image_width: ...
+    image_height: ...
+    camera_matrix:
+      - [fx, 0, cx]
+      - [0, fy, cy]
+      - [0, 0, 1]
+    distortion_coefficients: [...]
     """
-    with json_path.open("r") as f:
-        data: Dict[str, Any] = json.load(f)
+    with yaml_path.open("r") as f:
+        data: Dict[str, Any] = yaml.safe_load(f)
 
-    width: int = int(data["image_width"])
-    height: int = int(data["image_height"])
+    width = int(data["image_width"])
+    height = int(data["image_height"])
 
-    K = np.array(data["camera_matrix"], dtype=np.float64)
-    dist = np.array(data["distortion_coefficients"], dtype=np.float64).reshape(-1, 1)
+    K = np.asarray(data["camera_matrix"], dtype=np.float64)
+    dist = np.asarray(data["distortion_coefficients"], dtype=np.float64).reshape(-1, 1)
 
     return K, dist, width, height, data
 
@@ -73,19 +70,7 @@ def capture_extrinsics_for_camera(
     target_id: int | None,
     window_name: str,
 ) -> Dict[str, Any]:
-    """
-    Open the given camera, detect an ArUco tag, and compute extrinsics.
 
-    world frame = ArUco tag frame
-    X_cam = R_world_to_cam * X_world + t_world_to_cam
-
-    Returns a dict containing:
-      - camera_index
-      - detected_id
-      - R_world_to_cam, t_world_to_cam
-      - R_cam_to_world, t_cam_to_world
-      - P_world_to_cam (projection matrix K [R|t])
-    """
     cap = cv2.VideoCapture(camera_index, cv2.CAP_V4L2)
     if not cap.isOpened():
         raise RuntimeError(f"Failed to open camera index {camera_index}")
@@ -93,21 +78,15 @@ def capture_extrinsics_for_camera(
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, img_w)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, img_h)
 
-    aruco_dict = cv2.aruco.getPredefinedDictionary(aruco_dict_id)
-    det_params = cv2.aruco.DetectorParameters()
-    detector = cv2.aruco.ArucoDetector(aruco_dict, det_params)
-
-    print(
-        f"[cam {camera_index}] Looking for ArUco tag "
-        f"(size={tag_size_m} m, dict={aruco_dict_id})"
+    detector = cv2.aruco.ArucoDetector(
+        cv2.aruco.getPredefinedDictionary(aruco_dict_id),
+        cv2.aruco.DetectorParameters(),
     )
-    print("Controls:")
-    print("  c = capture frame")
-    print("  q = abort this camera")
 
-    R_world_to_cam: Mat | None = None
-    t_world_to_cam: Mat | None = None
-    detected_id: int | None = None
+    R_wc = t_wc = detected_id = None
+
+    print(f"[cam {camera_index}] Looking for ArUco tag ({tag_size_m} m)")
+    print("  c = capture   q = abort")
 
     while True:
         ret, frame = cap.read()
@@ -115,146 +94,80 @@ def capture_extrinsics_for_camera(
             continue
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        corners, ids, _rejected = detector.detectMarkers(gray)
+        corners, ids, _ = detector.detectMarkers(gray)
 
         if ids is not None and len(ids) > 0:
             if target_id is not None:
-                mask = (ids.flatten() == target_id)
+                mask = ids.flatten() == target_id
                 if not np.any(mask):
-                    cv2.putText(
-                        frame,
-                        f"IDs: {ids.flatten().tolist()} (waiting for ID {target_id})",
-                        (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (0, 0, 255),
-                        2,
-                    )
-                else:
-                    sel_idx = np.where(mask)[0][0]
-                    corners = [corners[sel_idx]]
-                    ids = ids[mask]
-            else:
-                cv2.putText(
-                    frame,
-                    f"Detected IDs: {ids.flatten().tolist()}",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 0),
-                    2,
-                )
+                    continue
+                corners = [corners[np.where(mask)[0][0]]]
+                ids = ids[mask]
 
-            cv2.aruco.drawDetectedMarkers(frame, corners, ids)
-
-            rvecs, tvecs, _obj_pts = cv2.aruco.estimatePoseSingleMarkers(
+            rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
                 corners, tag_size_m, K, dist
             )
 
-            rvec = rvecs[0]
-            tvec = tvecs[0]
-            detected_id = int(ids[0, 0])
+            rvec, tvec = rvecs[0], tvecs[0]
+            detected_id = int(ids[0][0])
+            R_wc, _ = cv2.Rodrigues(rvec)
+            t_wc = tvec.reshape(3, 1)
 
-            cv2.drawFrameAxes(
-                frame, K, dist, rvec, tvec, tag_size_m * 0.5
-            )
-
-            cv2.putText(
-                frame,
-                f"ID {detected_id}: press 'c' to capture",
-                (10, img_h - 20),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 255, 0),
-                2,
-            )
-
-            R, _ = cv2.Rodrigues(rvec)
-            t = tvec.reshape(3, 1)
-            R_world_to_cam = R
-            t_world_to_cam = t
-
-        else:
-            cv2.putText(
-                frame,
-                "No ArUco tag detected",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 0, 255),
-                2,
-            )
+            cv2.aruco.drawDetectedMarkers(frame, corners, ids)
+            cv2.drawFrameAxes(frame, K, dist, rvec, tvec, tag_size_m * 0.5)
 
         cv2.imshow(window_name, frame)
         key = cv2.waitKey(1) & 0xFF
 
-        if key == ord("c"):
-            if R_world_to_cam is None or t_world_to_cam is None or detected_id is None:
-                print("[WARN] No valid pose yet; can't capture.")
-                continue
-            print(f"[cam {camera_index}] Captured pose for tag ID {detected_id}")
+        if key == ord("c") and R_wc is not None:
             break
-        elif key == ord("q"):
-            print(f"[cam {camera_index}] Aborted by user.")
-            R_world_to_cam = None
-            t_world_to_cam = None
-            detected_id = None
-            break
+        if key == ord("q"):
+            raise RuntimeError(f"[cam {camera_index}] Capture aborted")
 
     cap.release()
     cv2.destroyWindow(window_name)
 
-    if R_world_to_cam is None or t_world_to_cam is None or detected_id is None:
-        raise RuntimeError(f"Failed to capture extrinsics for camera {camera_index}")
+    R_cw = R_wc.T
+    t_cw = -R_wc.T @ t_wc
 
-    # inverse: camera -> world
-    R_cam_to_world = R_world_to_cam.T
-    t_cam_to_world = -R_world_to_cam.T @ t_world_to_cam
-
-    # projection matrix P = K [R|t] (maps world -> pixels)
-    Rt = np.hstack((R_world_to_cam, t_world_to_cam))  # 3x4
-    P_world_to_cam = K @ Rt  # 3x4
+    P = K @ np.hstack((R_wc, t_wc))
 
     return {
         "camera_index": camera_index,
         "detected_id": detected_id,
-        # world = ArUco tag frame
-        # X_cam = R_world_to_cam * X_world + t_world_to_cam
-        "R_world_to_cam": R_world_to_cam.tolist(),
-        "t_world_to_cam": t_world_to_cam.flatten().tolist(),
-        # X_world = R_cam_to_world * X_cam + t_cam_to_world
-        "R_cam_to_world": R_cam_to_world.tolist(),
-        "t_cam_to_world": t_cam_to_world.flatten().tolist(),
-        # Projection matrix (for convenience)
-        "P_world_to_cam": P_world_to_cam.tolist(),
+        "R_world_to_cam": R_wc.tolist(),
+        "t_world_to_cam": t_wc.flatten().tolist(),
+        "R_cam_to_world": R_cw.tolist(),
+        "t_cam_to_world": t_cw.flatten().tolist(),
+        "P_world_to_cam": P.tolist(),
     }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description=(
-            "Compute full stereo calibration (intrinsics + extrinsics) for two cameras "
-            "relative to an ArUco tag, using existing intrinsics JSON files."
-        )
+        description="Stereo extrinsics from two cameras relative to an ArUco tag (YAML I/O)"
     )
 
-    parser.add_argument("--cam0-json", type=str, help="Intrinsics JSON for camera 0")
-    parser.add_argument("--cam1-json", type=str, help="Intrinsics JSON for camera 1")
-    parser.add_argument("--cam0-index", type=int, default=0, help="VideoCapture index for camera 0")
-    parser.add_argument("--cam1-index", type=int, default=2, help="VideoCapture index for camera 1")
+    parser.add_argument("--cam0-yaml", required=True)
+    parser.add_argument("--cam1-yaml", required=True)
 
-    parser.add_argument("--tag-size-m", type=float, help="Physical side length of the ArUco tag in meters")
+    parser.add_argument("--cam0-index", type=int, default=0)
+    parser.add_argument("--cam1-index", type=int, default=2)
 
-    parser.add_argument("--aruco-dict", type=int, default=cv2.aruco.DICT_4X4_50, help="ArUco dictionary id, e.g., cv2.aruco.DICT_4X4_50")
-    parser.add_argument("--target-id", type=int, default=-1, help="Specific ArUco ID to use (if >= 0); otherwise accept any")
+    parser.add_argument("--tag-size-m", type=float, required=True)
+    parser.add_argument("--aruco-dict", type=int, default=cv2.aruco.DICT_4X4_50)
+    parser.add_argument("--target-id", type=int, default=-1)
 
-    parser.add_argument("--output-json", type=str, default="stereo_calibration_aruco_world.json", help="Output JSON file for full stereo calibration")
+    parser.add_argument(
+        "--output-yaml",
+        default="stereo_calibration.yaml",
+        help="Output YAML file",
+    )
 
     parser.add_argument("--print-tag", action="store_true")
-    parser.add_argument("--tag-id", type=int, default=0, help="ArUco marker ID to print")
-    parser.add_argument("--tag-px", type=int, default=600, help="Printed tag size in pixels")
-    parser.add_argument("--output-tag", type=str, default="aruco_tag.png", help="Output PNG path for printed ArUco tag")
+    parser.add_argument("--tag-id", type=int, default=0)
+    parser.add_argument("--tag-px", type=int, default=600)
+    parser.add_argument("--output-tag", default="aruco_tag.png")
 
     args = parser.parse_args()
 
@@ -262,68 +175,37 @@ def main() -> None:
         print_aruco_tag(args)
         return
 
-    if not args.cam0_json:
-        parser.error("--cam0-json is required")
-    if not args.cam1_json:
-        parser.error("--cam1-json is required")
-    if not args.tag_size_m:
-        parser.error("--tag-size-m is required")
+    K0, d0, w0, h0, intr0 = load_intrinsics(Path(args.cam0_yaml))
+    K1, d1, w1, h1, intr1 = load_intrinsics(Path(args.cam1_yaml))
 
+    target_id = None if args.target_id < 0 else args.target_id
 
-    cam0_json = Path(args.cam0_json)
-    cam1_json = Path(args.cam1_json)
-
-    K0, dist0, w0, h0, intr0 = load_intrinsics(cam0_json)
-    K1, dist1, w1, h1, intr1 = load_intrinsics(cam1_json)
-
-    target_id: int | None = None if args.target_id < 0 else args.target_id
-
-    print("=== Camera 0 extrinsics ===")
-    cam0_extrinsics = capture_extrinsics_for_camera(
-        camera_index=args.cam0_index,
-        K=K0,
-        dist=dist0,
-        img_w=w0,
-        img_h=h0,
-        tag_size_m=args.tag_size_m,
-        aruco_dict_id=args.aruco_dict,
-        target_id=target_id,
-        window_name="Camera 0",
+    cam0 = capture_extrinsics_for_camera(
+        args.cam0_index, K0, d0, w0, h0,
+        args.tag_size_m, args.aruco_dict,
+        target_id, "Camera 0"
     )
 
-    print("=== Camera 1 extrinsics ===")
-    cam1_extrinsics = capture_extrinsics_for_camera(
-        camera_index=args.cam1_index,
-        K=K1,
-        dist=dist1,
-        img_w=w1,
-        img_h=h1,
-        tag_size_m=args.tag_size_m,
-        aruco_dict_id=args.aruco_dict,
-        target_id=target_id,
-        window_name="Camera 1",
+    cam1 = capture_extrinsics_for_camera(
+        args.cam1_index, K1, d1, w1, h1,
+        args.tag_size_m, args.aruco_dict,
+        target_id, "Camera 1"
     )
 
-    out_data: Dict[str, Any] = {
-        "world_frame": f"aruco_tag_{cam0_extrinsics['detected_id']}",
+    out = {
+        "world_frame": f"aruco_tag_{cam0['detected_id']}",
         "tag_size_m": args.tag_size_m,
         "aruco_dictionary": int(args.aruco_dict),
-        "target_id": cam0_extrinsics["detected_id"],  # both should see same ID
-        "camera0": {
-            "intrinsics": intr0,
-            "extrinsics": cam0_extrinsics,
-        },
-        "camera1": {
-            "intrinsics": intr1,
-            "extrinsics": cam1_extrinsics,
-        },
+        "target_id": cam0["detected_id"],
+        "camera_0": {"intrinsics": intr0, "extrinsics": cam0},
+        "camera_1": {"intrinsics": intr1, "extrinsics": cam1},
     }
 
-    out_path = Path(args.output_json)
+    out_path = Path(args.output_yaml)
     with out_path.open("w") as f:
-        json.dump(out_data, f, indent=2)
+        yaml.safe_dump(out, f, sort_keys=False)
 
-    print(f"Saved full stereo calibration to: {out_path.resolve()}")
+    print(f"Saved stereo calibration to: {out_path.resolve()}")
 
 
 if __name__ == "__main__":

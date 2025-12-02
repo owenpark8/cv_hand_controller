@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+import yaml
 from numpy.typing import NDArray
 
 Image = NDArray[np.uint8]
 Mat = NDArray[np.float64]
+
 
 def create_charuco_board(
     args: argparse.Namespace,
@@ -186,8 +187,8 @@ def calibrate(args: argparse.Namespace) -> None:
     )
 
     result: Dict[str, Any] = {
-        "image_width": image_size[0],
-        "image_height": image_size[1],
+        "image_width": int(image_size[0]),
+        "image_height": int(image_size[1]),
         "camera_matrix": K.tolist(),
         "distortion_coefficients": dist.ravel().tolist(),
         "rms_reprojection_error": float(rms),
@@ -201,9 +202,9 @@ def calibrate(args: argparse.Namespace) -> None:
         "per_view_errors": [],
     }
 
-    out_path = Path(args.output_json)
+    out_path = Path(args.output_yaml)
     with out_path.open("w") as f:
-        json.dump(result, f, indent=2)
+        yaml.safe_dump(result, f, sort_keys=False)
 
     print(f"Saved intrinsics to: {out_path.resolve()}")
 
@@ -251,10 +252,10 @@ def main() -> None:
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--min-samples", type=int, default=10)
     parser.add_argument(
-        "--output-json",
+        "--output-yaml",
         type=str,
-        default="camera_intrinsics.json",
-        help="Output JSON path for calibrated intrinsics",
+        default="camera_intrinsics.yaml",
+        help="Output YAML path for calibrated intrinsics",
     )
 
     args = parser.parse_args()
