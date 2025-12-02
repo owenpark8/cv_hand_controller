@@ -12,7 +12,8 @@ This ROS 2 package allows for the control of a robotic end-effector by tracking 
     - Tested with [ROS 2 Humble](https://docs.ros.org/en/humble/index.html)
 - python >= 3.10
     - mediapipe >= 0.10.14
-    - opencv-contrib-python >= 4.12
+    - opencv >= 4.12
+    - opencv-contrib >= 4.12
     - pyyaml
 
 ```sh
