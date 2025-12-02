@@ -53,4 +53,22 @@ def generate_launch_description():
                 "calibration_yaml_path": calibration_path,
             }],
         ),
+        Node(
+            package="cv_hand_controller",
+            executable="ik_bridge_node.py",
+            name="ik_bridge",
+            output="screen",
+            parameters=[{
+                "output_topic": "/ee_pos_cmd",
+                "src_map_x": "z",
+                "src_map_y": "x",
+                "src_map_z": "y",
+                "arm_offset_x": 1.25,
+                "arm_offset_y": 0.20,
+                "arm_offset_z": 0.00,
+                "arm_scale_x": -2.0,
+                "arm_scale_y": -1.5,
+                "arm_scale_z": 2.0,
+            }],
+        ),
     ])

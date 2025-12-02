@@ -78,7 +78,7 @@ def draw_landmarks_on_image(rgb_image: np.ndarray,
     return annotated_image
 
 
-class Camera(Node):
+class CameraNode(Node):
     def __init__(self) -> None:
         super().__init__("camera")
         self.get_logger().info("camera node started")
@@ -284,7 +284,7 @@ class Camera(Node):
 if __name__ == "__main__":
     rclpy.init(args=sys.argv)
 
-    node: Camera = Camera()
+    node: CameraNode = CameraNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

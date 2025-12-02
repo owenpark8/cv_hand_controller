@@ -6,6 +6,7 @@ find_package(ament_cmake_python REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(mrover REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   msg/FingerPoints.msg
@@ -19,6 +20,7 @@ ament_export_dependencies(rosidl_default_runtime)
 install(PROGRAMS
   cv_hand_controller/camera_node.py
   cv_hand_controller/triangulation_node.py
+  cv_hand_controller/ik_bridge_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
