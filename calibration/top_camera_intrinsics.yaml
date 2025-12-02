@@ -1,0 +1,26 @@
+image_width: 640
+image_height: 480
+camera_matrix:
+- - 540.0707506090532
+  - 0.0
+  - 328.82005133848446
+- - 0.0
+  - 540.198160185664
+  - 266.04624246029925
+- - 0.0
+  - 0.0
+  - 1.0
+distortion_coefficients:
+- -0.44158450243001
+- 0.2701445200189763
+- -0.0013483478483538715
+- 0.0012721967408820694
+- -0.10524639510109
+rms_reprojection_error: 0.12479178956307861
+board:
+  squares_x: 5
+  squares_y: 7
+  square_length_m: 0.04
+  marker_length_m: 0.02
+  aruco_dictionary: 0
+per_view_errors: []
