@@ -5,14 +5,18 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
+import cv2
 import numpy as np
 import rclpy
 import yaml
 from numpy.typing import NDArray
 from rclpy.node import Node
 
+from cv_hand_controller.msg import FingerPoints
+from geometry_msgs.msg import PointStamped
+from message_filters import ApproximateTimeSynchronizer, Subscriber as MFSubscriber
 
 Mat = NDArray[np.float64]
 
@@ -49,7 +53,16 @@ class StereoTriangulationNode(Node):
         super().__init__("stereo_triangulation")
 
         self.declare_parameter("calibration_yaml_path", "")
+        self.declare_parameter("camera_0_topic", "/camera_0/finger_points")
+        self.declare_parameter("camera_1_topic", "/camera_1/finger_points")
+        self.declare_parameter("sync_queue_size", 10)
+        self.declare_parameter("sync_slop_sec", 0.03)  # max time delta between msgs
+
         calib_path_param = self.get_parameter("calibration_yaml_path").get_parameter_value().string_value
+        topic0 = self.get_parameter("camera_0_topic").get_parameter_value().string_value
+        topic1 = self.get_parameter("camera_1_topic").get_parameter_value().string_value
+        queue_size = int(self.get_parameter("sync_queue_size").value)
+        slop_sec = float(self.get_parameter("sync_slop_sec").value)
 
         if not calib_path_param:
             raise RuntimeError("Parameter 'calibration_yaml_path' must be set to a YAML file path")
@@ -58,6 +71,7 @@ class StereoTriangulationNode(Node):
         if not calib_path.is_file():
             raise RuntimeError(f"Calibration YAML not found: {calib_path}")
 
+        # calibration yaml
         self.get_logger().info(f"Loading stereo calibration from: {calib_path}")
 
         (
@@ -68,13 +82,33 @@ class StereoTriangulationNode(Node):
             self.m_cam0,
             self.m_cam1,
         ) = self._load_calibration_yaml(calib_path)
-
         self._log_calibration_summary()
 
-        # TODO: in next step:
-        #  - subscribe to camera_0 and camera_1 FingerPoints topics
-        #  - triangulate corresponding points into world frame
-        #  - publish geometry_msgs/PointStamped
+        # publisher
+        self.m_thumb_point_pub = self.create_publisher(
+            PointStamped,
+            "triangulated_thumb_point",
+            10,
+        )
+
+        # subscribers
+        self.get_logger().info(
+            f"Subscribing to:\n"
+            f"  camera_0_topic = {topic0}\n"
+            f"  camera_1_topic = {topic1}\n"
+            f"  sync_queue_size = {queue_size}, sync_slop_sec = {slop_sec}"
+        )
+        # message_filters subscribers wrap subscriptions
+        self.m_sub0 = MFSubscriber(self, FingerPoints, topic0)
+        self.m_sub1 = MFSubscriber(self, FingerPoints, topic1)
+
+        self.m_sync_sub = ApproximateTimeSynchronizer(
+            [self.m_sub0, self.m_sub1],
+            queue_size=queue_size,
+            slop=slop_sec,
+        )
+        self.m_sync_sub.registerCallback(self._sync_callback)
+
 
 
     def _load_calibration_yaml(
@@ -139,6 +173,90 @@ class StereoTriangulationNode(Node):
         return CameraModel(name=name, intr=intr, extr=extr)
 
 
+    def _sync_callback(self, msg0: FingerPoints, msg1: FingerPoints) -> None:
+        # extract thumb finger points from each message
+        # FingerPoints thumb_points is expected to be [x, y, z]
+        thumb0 = list(msg0.thumb_points)
+        thumb1 = list(msg1.thumb_points)
+
+        if any(math.isnan(v) for v in thumb0) or any(math.isnan(v) for v in thumb1):
+            # one of the cameras lost the hand
+            self.get_logger().debug("Skipping pair: NaN index points")
+            return
+
+        x0_norm, y0_norm, _z0 = thumb0
+        x1_norm, y1_norm, _z1 = thumb1
+
+        # convert normalized [0,1] coords to pixel coordinates
+        u0 = x0_norm * self.m_cam0.intr.image_width
+        v0 = y0_norm * self.m_cam0.intr.image_height
+
+        u1 = x1_norm * self.m_cam1.intr.image_width
+        v1 = y1_norm * self.m_cam1.intr.image_height
+
+        Xw = self._triangulate_world(u0, v0, u1, v1)
+
+        if Xw is None:
+            self.get_logger().debug("Triangulation failed (degenerate?)")
+            return
+
+        X, Y, Z = Xw
+
+        pt = PointStamped()
+
+        # use average timestamp
+        t0 = msg0.header.stamp
+        t1 = msg1.header.stamp
+        pt.header.stamp.sec = (t0.sec + t1.sec) // 2
+        pt.header.stamp.nanosec = (t0.nanosec + t1.nanosec) // 2
+
+        pt.header.frame_id = self.m_world_frame
+
+        pt.point.x = float(X)
+        pt.point.y = float(Y)
+        pt.point.z = float(Z)
+
+        self.m_thumb_point_pub.publish(pt)
+
+    def _triangulate_world(self, u0: float, v0: float, u1: float, v1: float) -> Optional[np.ndarray]:
+        # undistort & normalize pixel to camera coordinates
+        x0, y0 = self._normalize_pixel(u0, v0, self.m_cam0.intr)
+        x1, y1 = self._normalize_pixel(u1, v1, self.m_cam1.intr)
+
+        # build projection matrices using only extrinsics [R|t]
+        # since x,y are normalized, P = [R|t].
+        P0 = np.hstack((self.m_cam0.extr.R_world_to_cam, self.m_cam0.extr.t_world_to_cam))  # 3x4
+        P1 = np.hstack((self.m_cam1.extr.R_world_to_cam, self.m_cam1.extr.t_world_to_cam))  # 3x4
+
+        # triangulate
+        pts0 = np.array([[x0], [y0]], dtype=np.float64)
+        pts1 = np.array([[x1], [y1]], dtype=np.float64)
+
+        X_h = cv2.triangulatePoints(P0, P1, pts0, pts1)  # 4x1
+        w = X_h[3, 0]
+        if abs(w) < 1e-9:
+            return None
+
+        X = X_h[:3, 0] / w  # 3D in world frame
+        return X
+
+    @staticmethod
+    def _normalize_pixel(u: float, v: float, intr: Intrinsics) -> Tuple[float, float]:
+        """
+        Use cv2.undistortPoints to map pixel coords -> normalized camera coords (x, y).
+        """
+        pts = np.array([[[u, v]]], dtype=np.float64)  # shape (1,1,2)
+        # cv2.undistortPoints returns normalized coordinates if newCameraMatrix=None
+        norm = cv2.undistortPoints(
+            pts,
+            intr.K,
+            intr.dist,
+            P=None,
+        )
+        x, y = norm[0, 0]
+        return float(x), float(y)
+
+
     def _log_calibration_summary(self) -> None:
         self.get_logger().info(f"World frame      : {self.m_world_frame}")
         self.get_logger().info(f"Tag size [m]     : {self.m_tag_size_m:.5f}")
@@ -154,17 +272,13 @@ class StereoTriangulationNode(Node):
         extr = cam.extr
 
         self.get_logger().info(f"[{cam.name}] camera_index = {extr.camera_index}")
-        self.get_logger().info(
-            f"[{cam.name}] image size  = {intr.image_width} x {intr.image_height}"
-        )
+        self.get_logger().info(f"[{cam.name}] image size  = {intr.image_width} x {intr.image_height}")
 
         fx = intr.K[0, 0]
         fy = intr.K[1, 1]
         cx = intr.K[0, 2]
         cy = intr.K[1, 2]
-        self.get_logger().info(
-            f"[{cam.name}] fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}"
-        )
+        self.get_logger().info(f"[{cam.name}] fx={fx:.2f}, fy={fy:.2f}, cx={cx:.2f}, cy={cy:.2f}")
 
         # quick position of camera in world frame (t_cam_to_world)
         pos = extr.t_cam_to_world.flatten()

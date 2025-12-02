@@ -177,7 +177,7 @@ class Camera(Node):
 
 
     def _maybe_grab_frame(self) -> None:
-        self.get_logger().info("Grab frame called")
+        # self.get_logger().info("Grab frame called")
 
         if self.m_landmarker is None or self.m_cap is None:
             self.get_logger().warn("Landmarker or camera not ready; skipping grab")
@@ -216,7 +216,7 @@ class Camera(Node):
         )
 
         msg = FingerPoints()
-        msg.header.frame_id = f"{self.m_frame_counter}"
+        msg.header.frame_id = f"{self.get_name()}"
         msg.header.stamp.sec = timestamp_ms // 1000
         msg.header.stamp.nanosec = (timestamp_ms % 1000) * 1_000_000
 
