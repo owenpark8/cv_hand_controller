@@ -47,8 +47,8 @@ python3 scripts/intrinsic_calibration.py --print-board
 
 Intrinsic calibration must be run twice: once for each camera:
 ```sh
-python3 scripts/intrinsic_calibration.py --camera-index 0 --output-yaml side_camera_intrinsics.yaml
-python3 scripts/intrinsic_calibration.py --camera-index 2 --output-yaml top_camera_intrinsics.yaml
+python3 scripts/intrinsic_calibration.py --camera-index 0 --output-yaml calibration/side_camera_intrinsics.yaml
+python3 scripts/intrinsic_calibration.py --camera-index 2 --output-yaml calibration/top_camera_intrinsics.yaml
 ```
 
 Please see the help for all arguments:
@@ -56,7 +56,7 @@ Please see the help for all arguments:
 python3 scripts/intrinsic_calibration.py --help
 ```
 
-The rest of the steps will assume you have saved the side view camera intrinsics in `side_camera_intrinsics.yaml` and the top view camera intrinsics in `top_camera_intrinsics.yaml`.
+The rest of the steps will assume you have saved the side view (camera 0) intrinsics in `calibration/side_camera_intrinsics.yaml` and the top view (camera 1) intrinsics in `calibration/top_camera_intrinsics.yaml`.
 
 ### Full stereo calibration
 
@@ -71,7 +71,7 @@ python3 scripts/stereo_calibration.py --print-tag
 Now, with both cameras in their desired positions for the final operator setup and the ArUco tag rigidly fixed to the desired coordinate frame origin (must be in view of both cameras), you may run the stereo calibration script:
 ```sh
 # modify --tag-size-m to match the size of your ArUco tag
-python3 scripts/stereo_calibration.py --tag-size-m 0.1 --cam0-yaml side_camera_intrinsics.yaml --cam0-index 0 --cam1-yaml top_camera_intrinsics.yaml --cam1-index 2
+python3 scripts/stereo_calibration.py --tag-size-m 0.09525 --cam0-yaml calibration/side_camera_intrinsics.yaml --cam0-index 0 --cam1-yaml calibration/top_camera_intrinsics.yaml --cam1-index 2 --output-yaml calibration/stereo_calibration.yaml
 ```
 
 Please see the help for all arguments:

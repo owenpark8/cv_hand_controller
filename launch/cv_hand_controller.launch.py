@@ -11,6 +11,12 @@ def generate_launch_description():
         "hand_landmarker.task",
     ])
 
+    calibration_path = PathJoinSubstitution([
+        FindPackageShare("cv_hand_controller"),
+        "calibration",
+        "stereo_calibration.yaml",
+    ])
+
     return LaunchDescription([
         Node(
             package="cv_hand_controller",
@@ -36,6 +42,15 @@ def generate_launch_description():
                 "camera_fps": 30.0,
                 "detection_period_ms": 100.0,
                 # "output_dir": "/tmp/test/top",
+            }],
+        ),
+        Node(
+            package="cv_hand_controller",
+            executable="triangulation_node.py",
+            name="triangulation",
+            output="screen",
+            parameters=[{
+                "calibration_yaml_path": calibration_path,
             }],
         ),
     ])

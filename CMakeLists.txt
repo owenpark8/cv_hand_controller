@@ -18,6 +18,7 @@ ament_export_dependencies(rosidl_default_runtime)
 
 install(PROGRAMS
   cv_hand_controller/camera_node.py
+  cv_hand_controller/triangulation_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -28,6 +29,11 @@ install(
 
 install(
   DIRECTORY model
+  DESTINATION share/${PROJECT_NAME}
+)
+
+install(
+  DIRECTORY calibration
   DESTINATION share/${PROJECT_NAME}
 )
 
